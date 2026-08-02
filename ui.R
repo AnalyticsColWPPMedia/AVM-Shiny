@@ -1,6 +1,6 @@
 
 ui <- fluidPage(
-  title = "MMM - Post Modeling",
+  title = "AVM Visualization",
   
   #==================================#
   #### 1. Load Resources (CSS/JS) ####
@@ -30,7 +30,7 @@ ui <- fluidPage(
       
       # Center (Titles)
       div(class = "header-center",
-          h1(class = "app-title", "MMM Post-Modeling"),
+          h1(class = "app-title", "AVM Visualization"),
           div(class = "app-subtitle", "By Advanced Analytics Colombia")
       ),
       
