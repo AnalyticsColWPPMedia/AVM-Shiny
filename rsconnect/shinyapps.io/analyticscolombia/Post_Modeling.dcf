@@ -1,0 +1,12 @@
+name: Post_Modeling
+title: Post_Modeling
+username: analyticscolombia
+account: analyticscolombia
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 16431324
+bundleId: 12081086
+url: https://analyticscolombia.shinyapps.io/Post_Modeling/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE

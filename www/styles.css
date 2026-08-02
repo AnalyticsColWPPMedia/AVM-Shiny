@@ -1,0 +1,255 @@
+/* =======================================================*/
+/* 1. Global Application Header                           */
+/* =======================================================*/
+
+.app-header {
+  /* WPP Style Gradient Background (Blue) */
+  background: linear-gradient(90deg, #5dade2 0%, #2980b9 100%) !important;
+  color: white !important;
+  
+  border-bottom: none;
+  padding: 15px 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 30px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.app-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: white !important;
+  margin: 0;
+  letter-spacing: 1px;
+}
+
+.app-subtitle {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.9) !important;
+  margin-top: 4px;
+  font-weight: 400;
+  text-align: center;
+  display: inline-block;
+}
+
+/* Header Alignment Helpers */
+.header-left, .header-right {
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.header-right {
+  justify-content: flex-end;
+}
+
+.header-center {
+  flex: 2;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* =======================================================*/
+/* 2. General Body and Layout Styles                      */
+/* =======================================================*/
+
+body {
+  background-color: #f4f6f9 !important;
+  font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  color: #333;
+}
+
+/* Main Card Container Style */
+.section-card {
+  background-color: #ffffff !important;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+  height: 100%;
+}
+
+/* Titles within Cards */
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #2c3e50;
+  margin-bottom: 15px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #3498db;
+  letter-spacing: 0.5px;
+}
+
+/* Form Inputs Styling */
+.form-control, .selectize-input {
+  background-color: #f9f9f9 !important;
+  border: 1px solid #dcdcdc !important;
+  border-radius: 4px !important;
+  min-height: 38px;
+}
+
+label {
+  font-weight: 600;
+  font-size: 13px;
+  color: #555;
+  margin-bottom: 5px;
+}
+
+.shiny-input-container {
+  width: 100% !important;
+}
+
+/* =======================================================*/
+/* 3. File Input Customization (Browse Button)            */
+/* =======================================================*/
+
+/* Ensures button and text input are on the same line/height */
+.input-group {
+  display: flex !important;
+  align-items: stretch !important;
+  width: 100% !important;
+}
+
+.input-group-btn {
+  width: auto !important;
+  display: flex !important;
+}
+
+/* Browse Button Style */
+.btn-file {
+  height: 40px !important; 
+  line-height: 1.5 !important;
+  padding: 6px 15px !important;
+  border-radius: 6px 0 0 6px !important; /* Left rounded corners */
+  margin: 0 !important;
+  display: flex !important;
+  align-items: center !important; 
+  background-color: #3498db !important;
+  color: white !important;
+  border: 1px solid #3498db !important;
+}
+
+.btn-file:hover {
+  background-color: #2980b9 !important;
+  border-color: #2980b9 !important;
+}
+
+/* Filename Text Input Style */
+.input-group .form-control {
+  height: 40px !important; 
+  min-height: 40px !important;
+  border-radius: 0 6px 6px 0 !important; /* Right rounded corners */
+  border-left: none !important;
+  box-shadow: none !important;
+  background-color: #f9f9f9 !important;
+  width: 100% !important; 
+}
+
+/* =======================================================*/
+/* 4. Model Performance Metrics (Card Footer)             */
+/* =======================================================*/
+
+/* Flex container for horizontal metrics layout */
+.metrics-container {
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  margin-top: 15px;
+  padding: 10px 0;
+}
+
+.metric-item {
+  text-align: center;
+  flex: 1;
+  border-right: 1px solid #eee;
+}
+
+.metric-item:last-child {
+  border-right: none;
+}
+
+/* Metric Value (Number) */
+.metric-value {
+  font-size: 22px;
+  font-weight: 400; /* Normal weight for visual balance */
+  color: #3498db;
+  line-height: 1.2;
+}
+
+/* Metric Label (Text) */
+.metric-label {
+  font-size: 15px;
+  font-weight: 400;
+  color: #5d6d7e;
+  text-transform: capitalize;
+  letter-spacing: 0.3px;
+  margin-top: 4px;
+}
+
+/* Metrics Section Title */
+.metrics-title {
+  color: #2c3e50;
+  font-size: 16px;
+  font-weight: 400;
+  margin-top: 20px;
+  margin-bottom: 10px;
+  
+  /* Left alignment with hierarchical indentation */
+  text-align: left;
+  padding-left: 25px;
+  border-left: 3px solid #3498db;
+  line-height: 1;
+  margin-left: 10px;
+}
+
+/* Separator Line */
+.card-divider {
+  border: 0;
+  height: 1px;
+  background-image: linear-gradient(to right, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0));
+  margin-top: 20px;
+  margin-bottom: 5px;
+}
+
+/* =======================================================*/
+/* 5. Date Range Input Correction (Robust)                */
+/* =======================================================*/
+
+.input-daterange {
+  display: flex !important;
+  align-items: stretch !important; /* Estira todos los hijos a la misma altura */
+  width: 100% !important;
+}
+
+/* Los inputs de fecha */
+.input-daterange input {
+  text-align: center;
+  flex: 1;
+  min-width: 0;
+  height: 38px !important;       /* Altura forzada */
+  min-height: 38px !important;
+  line-height: 1.5 !important;
+  border-radius: 4px !important;
+  margin: 0 !important;
+}
+
+/* El separador "to" */
+.input-daterange .input-group-addon {
+  background-color: #ecf0f1;
+  border-top: 1px solid #dcdcdc;
+  border-bottom: 1px solid #dcdcdc;
+  border-left: none;
+  border-right: none;
+  color: #7f8c8d;
+  font-size: 13px;
+  padding: 0 12px !important;    /* Padding horizontal solamente */
+  width: auto !important;
+  display: flex !important;
+  align-items: center !important; /* Centra el texto "to" verticalmente */
+  justify-content: center !important;
+  height: auto !important;       /* Hereda la altura del flex padre */
+}
