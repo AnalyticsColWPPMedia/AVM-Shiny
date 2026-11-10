@@ -39,12 +39,17 @@ Shiny.addCustomMessageHandler('toggleDownloadButtonClass', function(message) {
 // IIFE (Immediately Invoked Function Expression) to handle Datepicker positioning issues.
 // This solves the common problem where Bootstrap datepickers are hidden behind
 // other UI elements due to 'overflow: hidden' or stacking contexts.
+// It applies to every Shiny dateInput / dateRangeInput in the app (including
+// inputs inside modules, whose ids are namespaced, e.g. 'avm_module_1-reporting_window').
 (function() {
-  
+
+  // Any text input inside a Shiny date or date range input
+  var DATE_INPUT_SELECTOR = '.shiny-date-input input, .shiny-date-range-input input';
+
   // Helper function to detach the datepicker DOM element and append it directly to the body
   function moveDatepickerToBody($input) {
-    // Select the dropdown created by Shiny/Bootstrap
-    var $dp = $('.datepicker.datepicker-dropdown');
+    // Select only the dropdown currently open (a date range creates one per input)
+    var $dp = $('.datepicker.datepicker-dropdown:visible');
     if (!$dp.length) return;
 
     // Detach from current parent and append to body to escape local stacking contexts
@@ -63,7 +68,7 @@ Shiny.addCustomMessageHandler('toggleDownloadButtonClass', function(message) {
     if (!off) return;
 
     var h = $input.outerHeight() || 0;
-    
+
     // Position the dropdown just below the input box
     $dp.css({
       top: (off.top + h + 6) + 'px',
@@ -71,9 +76,9 @@ Shiny.addCustomMessageHandler('toggleDownloadButtonClass', function(message) {
     });
   }
 
-  // Event delegation for focus/click on specific date inputs
-  // Targets inputs named 'analysis_dates' and 'report_dates' dynamically
-  $(document).on('focus click', 'input[name="analysis_dates"], input[name="report_dates"]', function() {
+  // Event delegation for focus/click on any date input (works for inputs
+  // rendered later, e.g. inside conditionalPanel or renderUI)
+  $(document).on('focus click', DATE_INPUT_SELECTOR, function() {
     var $inp = $(this);
     // Slight delay to ensure the Datepicker DOM element has been created by the library
     setTimeout(function() {
@@ -84,7 +89,7 @@ Shiny.addCustomMessageHandler('toggleDownloadButtonClass', function(message) {
   // Reposition datepicker dynamically when window scrolls or resizes
   // ensures the popup stays attached to the input field visually
   $(window).on('scroll resize', function() {
-    var $active = $('input[name="analysis_dates"]:focus, input[name="report_dates"]:focus');
+    var $active = $(DATE_INPUT_SELECTOR).filter(':focus');
     if ($active.length) {
       moveDatepickerToBody($active.first());
     }

@@ -5,8 +5,9 @@ account: analyticscolombia
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 16431324
-bundleId: 12081086
+bundleId: 12355074
 url: https://analyticscolombia.shinyapps.io/Post_Modeling/
 version: 1
 asMultiple: FALSE
 asStatic: FALSE
+ignoredFiles: documentation/Documentation-ES.pdf|documentation/Documentation EN.Rmd|documentation/Documentation ES.Rmd

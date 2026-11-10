@@ -124,57 +124,53 @@ mod_avm_ui <- function(id) {
 mod_avm_server <- function(id) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
-    
+
     ##### 2.1. Data Ingestion #####
     # ============================#
-    
-    data_upload <- reactive({
+
+    # Single reactive that unzips and reads both files at once (unique folder
+    # per upload), so there is no dependency on evaluation order.
+    awb_files <- reactive({
       req(input$file1)
-      unzip(input$file1$datapath, exdir = tempdir())
-      read_csv(file.path(tempdir(), 'Model AVM.csv'), show_col_types = FALSE) %>%
-        dplyr::filter(!is.na(Model))
+      tryCatch(
+        read_awb_zip(input$file1$datapath),
+        error = function(e) validate(need(FALSE, conditionMessage(e)))
+      )
     })
-    
-    var_stats_upload <- reactive({
-      req(input$file1)
-      read_csv(file.path(tempdir(), 'Variables Statistics.csv'), show_col_types = FALSE)
-    })
-    
+
+    data_upload <- reactive(awb_files()$avm)
+    var_stats_upload <- reactive(awb_files()$var_stats)
+
     observe({
       req(data_upload(), input$report_type)
       df <- data_upload()
-      
+
       max_date <- max(df$Period, na.rm = TRUE)
       min_date <- min(df$Period, na.rm = TRUE)
-      
-      start_date <- min_date
-      end_date <- max_date
-      
+
       if (input$report_type %in% c("L52", "L13")) {
-        days_back <- if(input$report_type == "L52") 364 else 91
-        calc_start <- max_date - days_back
-        start_date <- max(min_date, calc_start)
-        
+        # Both ends are inclusive: the last N weeks start (N - 1) weeks before
+        # the last period (52 weeks -> 51 * 7 days back).
+        n_weeks <- if (input$report_type == "L52") 52 else 13
+        start_date <- max(min_date, max_date - (n_weeks - 1) * 7)
+
         updateDateRangeInput(session, 'reporting_window',
-                             start = start_date, 
-                             end = end_date,
-                             min = min_date, 
-                             max = max_date)
+                             start = start_date, end = max_date,
+                             min = min_date, max = max_date)
       } else {
-        current_start <- input$reporting_window[1]
-        if (is.null(current_start)) {
+        if (is.null(input$reporting_window[1])) {
           updateDateRangeInput(session, 'reporting_window',
-                               start = start_date, end = end_date,
+                               start = min_date, end = max_date,
                                min = min_date, max = max_date)
         } else {
           updateDateRangeInput(session, 'reporting_window', min = min_date, max = max_date)
         }
       }
     })
-    
+
     ##### 2.2. Dynamic UI Rendering #####
     #===================================#
-    
+
     output$dynamic_filters_container <- renderUI({
       req(data_upload())
       data <- data_upload()
@@ -186,12 +182,10 @@ mod_avm_server <- function(id) {
       if("Creative" %in% input$DimensionFilter) ui_elems[[length(ui_elems)+1]] <- div(style="margin-top:10px", selectInput(ns('SelectCreat'), 'Creative', choices = c("Total", unique(data$Creative)), selected = "Total", width = "100%"))
       do.call(tagList, ui_elems)
     })
-    
-    # (El renderUI de transformation_container fue eliminado aquí porque ahora es estático en la UI)
-    
+
     ##### 2.3. Helpers & Cleaning #####
     #=================================#
-    
+
     kpi_name_clean <- reactive({
       req(var_stats_upload())
       vstats <- var_stats_upload()
@@ -199,93 +193,81 @@ mod_avm_server <- function(id) {
       if(length(raw_name) == 0) return("KPI")
       raw_name %>% str_replace_all("[-_\\.]", " ") %>% str_remove_all("(?i)(total\\s+)+total") %>% str_remove_all("(?i)^(log|ln)\\s+") %>% str_remove_all("(?i)\\s+(log|ln)$") %>% str_squish() %>% str_to_title()
     })
-    
+
+    # Normalisation of the dependent variable (raw value from Variables Statistics)
+    dep_norm <- reactive({
+      req(var_stats_upload())
+      var_stats_upload() %>% filter(DepVar == TRUE) %>% pull(Normalisation) %>% head(1)
+    })
+
+    # Number of model parameters for the Adjusted R2
+    k_params <- reactive({
+      req(var_stats_upload())
+      n_model_params(var_stats_upload())
+    })
+
     ##### 2.4. Data Processing (Calc) #####
     #=====================================#
-    
+
+    # Transformed data for ALL entities. Computed once per upload/transformation
+    # and shared by the charts, the entity table and the download.
+    transformed_data <- reactive({
+      req(data_upload(), input$kpi_transform)
+      norm <- dep_norm()
+      transform_kpi(data_upload(), input$kpi_transform, if (length(norm) == 0) NA else norm)
+    })
+
+    # Transformed data filtered by the selected dimension values
     newdata_calc <- reactive({
-      req(data_upload(), var_stats_upload())
-      data <- data_upload()
-      var_stats <- var_stats_upload()
-      
+      data <- transformed_data()
+
       if (!is.null(input$Geo) && input$Geo != 'Total') data <- filter(data, Geography == input$Geo)
       if (!is.null(input$SelectProd) && input$SelectProd != 'Total') data <- filter(data, Product == input$SelectProd)
       if (!is.null(input$SelectCamp) && input$SelectCamp != 'Total') data <- filter(data, Campaign == input$SelectCamp)
       if (!is.null(input$SelectOutlet) && input$SelectOutlet != 'Total') data <- filter(data, Outlet == input$SelectOutlet)
       if (!is.null(input$SelectCreat) && input$SelectCreat != 'Total') data <- filter(data, Creative == input$SelectCreat)
-      
-      # --- CAMBIO 1: Lógica de transformación simplificada ---
-      transform_type <- input$kpi_transform
-      var_norm <- filter(var_stats, DepVar == TRUE)$Normalisation[1]
-      
-      if (transform_type == "Log") {
-        if(var_norm == 'AROUND 0'){
-          data$Actual_Trans <- exp(data$DepVar + data$DepVarAvg)
-          data$Fitted_Trans <- exp(data$Model + data$DepVarAvg)
-        } else {
-          data$Actual_Trans <- exp(data$DepVar)
-          data$Fitted_Trans <- exp(data$Model)
-        }
-      } else {
-        if(var_norm == 'AROUND 0'){
-          data$Actual_Trans <- data$DepVar + data$DepVarAvg
-          data$Fitted_Trans <- data$Model + data$DepVarAvg
-        } else {
-          data$Actual_Trans <- data$DepVar
-          data$Fitted_Trans <- data$Model
-        }
-      }
-      return(data)
+
+      data
     })
-    
+
+    # Aggregated by period (Actual, Fitted, Residual). Single source for all
+    # charts and screen metrics, so all of them use the same observations.
+    agg_data <- reactive({
+      aggregate_avm(newdata_calc())
+    })
+
     ##### 2.5. Metrics Calculation #####
     #==================================#
-    
+
     model_metrics <- reactive({
-      req(newdata_calc(), var_stats_upload(), input$reporting_window)
-      df <- newdata_calc()
-      vstats <- var_stats_upload()
-      
-      graph_data <- df %>% group_by(Period) %>%
-        summarise(Actual = sum(na.omit(Actual_Trans)), Fitted = sum(na.omit(Fitted_Trans))) %>% filter(Actual != 0)
-      
-      r2_res <- r2(graph_data$Actual, graph_data$Fitted, graph_data$Period, vstats)
-      mape_res <- calcMAPE(graph_data$Actual, graph_data$Fitted)
-      
-      window_start <- input$reporting_window[1]
-      window_end <- input$reporting_window[2]
-      graph_data_win <- graph_data %>% filter(Period >= window_start & Period <= window_end)
-      
-      if(nrow(graph_data_win) > 0) {
-        # Para Window solo necesitamos el R2 normal, ignoramos el R2 Ajustado aquí
-        r2_res_win <- r2(graph_data_win$Actual, graph_data_win$Fitted, graph_data_win$Period, vstats)
-        mape_res_win <- calcMAPE(graph_data_win$Actual, graph_data_win$Fitted)
-      } else {
-        r2_res_win <- list(R2 = NA)
-        mape_res_win <- NA
-      }
-      
-      n_obs <- nrow(df)
-      norm_val <- vstats %>% filter(DepVar == TRUE) %>% pull(Normalisation) %>% head(1)
+      req(agg_data(), input$reporting_window)
+      graph_data <- agg_data()
+
+      m_full <- fit_metrics(graph_data$Actual, graph_data$Fitted, k_params())
+
+      graph_data_win <- graph_data %>%
+        filter(Period >= input$reporting_window[1] & Period <= input$reporting_window[2])
+      # Only R2 and MAPE are reported for the window (Adj R2 is not meaningful here)
+      m_win <- fit_metrics(graph_data_win$Actual, graph_data_win$Fitted, k_params())
+
+      norm_val <- dep_norm()
       norm_label <- "None"
       if(length(norm_val) > 0 && !is.na(norm_val)) {
         if(norm_val == "AROUND 0") { norm_label <- "SUB" } else if(norm_val == "AROUND 1") { norm_label <- "DIV" }
       }
-      
+
       list(
-        R2 = paste0(formatC(r2_res$R2 * 100, format = "f", digits = 2), "%"),
-        R2_Adj = paste0(formatC(r2_res$R2_Adj * 100, format = "f", digits = 2), "%"),
-        MAPE = paste0(round(mape_res, 2), "%"),
-        
-        # --- CAMBIO 2: Removemos R2_Adj_Win de la lista ---
-        R2_Win = ifelse(is.na(r2_res_win$R2), "N/A", paste0(formatC(r2_res_win$R2 * 100, format = "f", digits = 2), "%")),
-        MAPE_Win = ifelse(is.na(mape_res_win), "N/A", paste0(round(mape_res_win, 2), "%")),
-        
-        NObs = scales::comma(n_obs),
-        Norm = norm_label
+        R2       = fmt_pct(m_full$R2),
+        R2_Adj   = fmt_pct(m_full$R2_Adj),
+        MAPE     = fmt_pct(m_full$MAPE / 100),
+        NObs     = scales::comma(m_full$N),
+        R2_Win   = fmt_pct(m_win$R2),
+        MAPE_Win = fmt_pct(m_win$MAPE / 100),
+        NObs_Win = scales::comma(m_win$N),
+        Norm     = norm_label
       )
     })
-    
+
     output$metrics_ui <- renderUI({
       req(model_metrics())
       m <- model_metrics()
@@ -297,247 +279,203 @@ mod_avm_server <- function(id) {
                 div(class = "metrics-container",
                     div(class = "metric-item", div(class = "metric-value", m$R2), div(class = "metric-label", "R²")),
                     div(class = "metric-item", div(class = "metric-value", m$R2_Adj), div(class = "metric-label", "Adj R²")),
-                    div(class = "metric-item", div(class = "metric-value", m$MAPE), div(class = "metric-label", "MAPE"))
+                    div(class = "metric-item", div(class = "metric-value", m$MAPE), div(class = "metric-label", "MAPE")),
+                    div(class = "metric-item", div(class = "metric-value", m$NObs), div(class = "metric-label", "Observations"))
                 )
             ),
             div(style = "border-left: 1px solid #e0e0e0; margin: 0 10px;"),
             div(style = "width: 48%;",
                 div(class = "metrics-title", style = "border-left: 3px solid #27ae60; color: #27ae60;", "Reporting Window"),
-                # --- CAMBIO 2: Quitamos el bloque de Adj R2 de la UI para la ventana ---
                 div(class = "metrics-container",
                     div(class = "metric-item", div(class = "metric-value", style="color: #27ae60;", m$R2_Win), div(class = "metric-label", "R²")),
-                    div(class = "metric-item", div(class = "metric-value", style="color: #27ae60;", m$MAPE_Win), div(class = "metric-label", "MAPE"))
+                    div(class = "metric-item", div(class = "metric-value", style="color: #27ae60;", m$MAPE_Win), div(class = "metric-label", "MAPE")),
+                    div(class = "metric-item", div(class = "metric-value", style="color: #27ae60;", m$NObs_Win), div(class = "metric-label", "Observations"))
                 )
             )
         ),
         div(style = "margin-top: 15px; text-align: center; color: #7f8c8d; font-size: 0.9em;",
-            paste("Total Observations:", m$NObs, " | Normalization:", m$Norm)
+            paste("Normalization:", m$Norm)
         )
       )
     })
-    
+
     ##### 2.6. Metrics By Entity Table #####
-    #==============================================#
-    
+    #======================================#
+
     output$entity_table <- DT::renderDT({
-      req(input$show_entity_metrics)
-      req(data_upload(), var_stats_upload())
-      
-      raw_df <- data_upload()
-      vstats <- var_stats_upload()
-      
-      # --- CAMBIO 1: Lógica de transformación simplificada en la tabla ---
-      transform_type <- input$kpi_transform
-      var_norm <- filter(vstats, DepVar == TRUE)$Normalisation[1]
-      
-      if (transform_type == "Log") {
-        if(var_norm == 'AROUND 0'){
-          raw_df$Actual <- exp(raw_df$DepVar + raw_df$DepVarAvg)
-          raw_df$Model <- exp(raw_df$Model + raw_df$DepVarAvg)
-        } else {
-          raw_df$Actual <- exp(raw_df$DepVar)
-          raw_df$Model <- exp(raw_df$Model)
-        }
-      } else {
-        if(var_norm == 'AROUND 0'){
-          raw_df$Actual <- raw_df$DepVar + raw_df$DepVarAvg
-          raw_df$Model <- raw_df$Model + raw_df$DepVarAvg
-        } else {
-          raw_df$Actual <- raw_df$DepVar
-          raw_df$Model <- raw_df$Model
-        }
-      }
-      
+      req(input$show_entity_metrics, transformed_data())
+
       dims <- input$DimensionFilter
-      
-      if (is.null(dims) || length(dims) == 0) {
-        df_grouped <- raw_df %>%
-          group_by(Period) %>%
-          summarise(Actual = sum(na.omit(Actual)), Model = sum(na.omit(Model)), .groups = "drop") %>%
-          filter(Actual != 0)
-        
-        res <- data.frame(Entity = "Total Data")
-        metrics <- r2(df_grouped$Actual, df_grouped$Model, df_grouped$Period, vstats)
-        res$R2 <- metrics$R2
-        res$R2_Adj <- metrics$R2_Adj
-        res$MAPE <- calcMAPE(df_grouped$Actual, df_grouped$Model) / 100
-        
-      } else {
-        df_grouped <- raw_df %>%
-          group_by(across(all_of(c(dims, "Period")))) %>%
-          summarise(Actual = sum(na.omit(Actual)), Model = sum(na.omit(Model)), .groups = "drop") %>%
-          filter(Actual != 0)
-        
-        res <- df_grouped %>%
-          group_by(across(all_of(dims))) %>%
-          summarise(
-            R2 = r2(Actual, Model, Period, vstats)$R2,
-            R2_Adj = r2(Actual, Model, Period, vstats)$R2_Adj,
-            MAPE = calcMAPE(Actual, Model) / 100,
-            .groups = "drop"
-          )
-      }
-      
-      mape_col_idx <- ncol(res) - 1
-      
+      if (is.null(dims)) dims <- character(0)
+
+      res <- aggregate_avm(transformed_data(), dims) %>%
+        group_by(across(all_of(dims))) %>%
+        summarise(m = list(fit_metrics(Actual, Fitted, k_params())), .groups = "drop") %>%
+        unnest(m) %>%
+        mutate(MAPE = MAPE / 100) %>%
+        rename(Observations = N)
+
+      if (length(dims) == 0) res <- bind_cols(tibble(Entity = "Total Data"), res)
+
+      # DT uses 0-based column indexes
+      mape_col_idx <- which(names(res) == "MAPE") - 1
+
       DT::datatable(res,
-                    filter = "top", 
+                    filter = "top",
                     rownames = FALSE,
-                    width = "100%", 
+                    width = "100%",
                     options = list(
                       pageLength = 5,
-                      autoWidth = FALSE, 
+                      autoWidth = FALSE,
                       scrollX = TRUE,
-                      dom = 'ltip', 
-                      order = list(list(mape_col_idx, 'desc')) 
+                      dom = 'ltip',
+                      order = list(list(mape_col_idx, 'desc'))
                     )) %>%
         DT::formatPercentage(c("R2", "R2_Adj", "MAPE"), 2)
     })
-    
+
     ##### 2.7. Data Download Logic #####
     #==================================#
-    
+
     output$download_data <- downloadHandler(
       filename = function() { paste("AvM_Data_", Sys.Date(), ".csv", sep = "") },
       content = function(file) {
-        req(data_upload(), var_stats_upload())
-        raw_df <- data_upload(); vstats <- var_stats_upload()
-        
-        # --- CAMBIO 1: Lógica de transformación simplificada en descarga ---
-        transform_type <- input$kpi_transform
-        var_norm <- filter(vstats, DepVar == TRUE)$Normalisation[1]
-        
-        if (transform_type == "Log") {
-          if(var_norm == 'AROUND 0'){ raw_df$Actual <- exp(raw_df$DepVar + raw_df$DepVarAvg); raw_df$Model <- exp(raw_df$Model + raw_df$DepVarAvg) } else { raw_df$Actual <- exp(raw_df$DepVar); raw_df$Model <- exp(raw_df$Model) }
-        } else {
-          if(var_norm == 'AROUND 0'){ raw_df$Actual <- raw_df$DepVar + raw_df$DepVarAvg; raw_df$Model <- raw_df$Model + raw_df$DepVarAvg } else { raw_df$Actual <- raw_df$DepVar; raw_df$Model <- raw_df$Model }
+        req(transformed_data())
+        k <- k_params()
+        dims <- input$DimensionFilter
+        if (is.null(dims)) dims <- character(0)
+
+        # Adds the fit metrics of each group as columns next to its data.
+        # Same aggregation (Actual != 0 dropped) as the screen metrics.
+        add_metrics <- function(agg, group_cols) {
+          agg %>%
+            group_by(across(all_of(group_cols))) %>%
+            mutate(fit_metrics(Actual, Fitted, k)) %>%
+            ungroup()
         }
-        
-        dims <- input$DimensionFilter; if (is.null(dims)) dims <- character(0)
-        calc_metrics_df <- function(dframe, group_cols) {
-          dframe %>% group_by(across(all_of(group_cols))) %>%
-            summarise(R2_val = r2(Actual, Model, Period, vstats)$R2, R2_Adj_val = r2(Actual, Model, Period, vstats)$R2_Adj, MAPE_val = calcMAPE(Actual, Model), Data = list(data.frame(Period = Period, Actual = Actual, Model = Model)), .groups = "drop") %>% unnest(Data)
+
+        df_split <- NULL
+        if (length(dims) > 0) {
+          df_split <- add_metrics(aggregate_avm(transformed_data(), dims), dims)
         }
-        df_split <- NULL; if(length(dims) > 0) { df_grouped <- raw_df %>% group_by(across(all_of(c(dims, "Period")))) %>% summarise(Actual = sum(na.omit(Actual)), Model = sum(na.omit(Model)), .groups = "drop"); df_split <- calc_metrics_df(df_grouped, dims) }
-        df_total <- raw_df %>% group_by(Period) %>% summarise(Actual = sum(na.omit(Actual)), Model = sum(na.omit(Model)), .groups = "drop")
-        df_total_metrics <- r2(df_total$Actual, df_total$Model, df_total$Period, vstats)
-        df_total$R2_val <- df_total_metrics$R2; df_total$R2_Adj_val <- df_total_metrics$R2_Adj; df_total$MAPE_val <- calcMAPE(df_total$Actual, df_total$Model)
-        if(length(dims) > 0) { for(d in dims) df_total[[d]] <- "Total" }
-        final_df <- bind_rows(df_split, df_total) %>% select(all_of(dims), Period, Actual, Model, R2 = R2_val, R2_Adjusted = R2_Adj_val, MAPE = MAPE_val) %>% arrange(across(all_of(dims)), Period)
+
+        df_total <- add_metrics(aggregate_avm(transformed_data()), character(0))
+        for (d in dims) df_total[[d]] <- "Total"
+
+        final_df <- bind_rows(df_split, df_total) %>%
+          select(all_of(dims), Period, Actual, Model = Fitted,
+                 R2, R2_Adjusted = R2_Adj, MAPE, Observations = N) %>%
+          arrange(across(all_of(dims)), Period)
+
         write_csv(final_df, file)
       }
     )
-    
+
     ##### 2.8. Plot Rendering #####
     #=============================#
-    
+
     # Chart 1: Actual vs Model
     output$AVM <- renderPlotly({
-      req(newdata_calc(), kpi_name_clean(), input$reporting_window)
-      df <- newdata_calc()
+      req(agg_data(), kpi_name_clean(), input$reporting_window)
       kpi_label <- kpi_name_clean()
-      
-      graph_data <- df %>% group_by(Period) %>%
-        summarise(Actual = sum(na.omit(Actual_Trans)), Fitted = sum(na.omit(Fitted_Trans))) %>% filter(Actual != 0)
-      
-      plot_data <- graph_data %>% pivot_longer(cols = c("Actual", "Fitted"), names_to = "AVM")
-      
+
+      plot_data <- agg_data() %>%
+        select(Period, Actual, Fitted) %>%
+        pivot_longer(cols = c("Actual", "Fitted"), names_to = "AVM")
+
       y_vals <- plot_data$value
       y_min <- min(y_vals, na.rm=TRUE) * 0.95
       y_max <- max(y_vals, na.rm=TRUE) * 1.05
-      
+
       rect_df <- data.frame(
         xmin = input$reporting_window[1],
         xmax = input$reporting_window[2],
         ymin = y_min,
         ymax = y_max
       )
-      
+
       p <- ggplot() +
-        geom_rect(data = rect_df, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), 
+        geom_rect(data = rect_df, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax),
                   fill="#27ae60", alpha=0.1, inherit.aes = FALSE) +
-        
-        geom_line(data = plot_data, 
+
+        geom_line(data = plot_data,
                   aes(x = Period, y = value, color = AVM, group = AVM,
                       text = paste0("<b>Period:</b> ", format(Period, "%Y-%m-%d"), "<br>",
                                     "<b>Type:</b> ", AVM, "<br>",
-                                    "<b>Value:</b> ", scales::comma(value, big.mark = ",", accuracy = 0.1))), 
+                                    "<b>Value:</b> ", scales::comma(value, big.mark = ",", accuracy = 0.1))),
                   linewidth = 1) +
-        
+
         scale_color_manual(values = c('Actual' = '#2980b9', 'Fitted' = '#c0392b')) +
         scale_y_continuous(n.breaks = 6, labels = scales::label_number(scale_cut = scales::cut_short_scale())) +
         scale_x_date(date_breaks = "1 month", date_labels = "%Y-%m") +
         labs(y = kpi_label, x = '', color = NULL) +
         theme_minimal() +
         theme(legend.position = "bottom", axis.text.x = element_text(angle = 45, hjust = 1))
-      
+
       ggplotly(p, tooltip = "text") %>%
-        style(hoverinfo = "skip", traces = 1) %>% 
+        style(hoverinfo = "skip", traces = 1) %>%
         layout(legend = list(orientation = 'h', x = 0.4, y = -0.2), margin = list(t = 20, b=50))
     })
-    
+
     # Chart 2: Residuals Performance
     output$residuals <- renderPlotly({
-      req(newdata_calc(), input$reporting_window)
-      df <- newdata_calc()
-      df_agg <- df %>% group_by(Period) %>% summarise(Actual = sum(na.omit(Actual_Trans)), Fitted = sum(na.omit(Fitted_Trans))) %>% mutate(value = Actual - Fitted)
-      
+      req(agg_data(), input$reporting_window)
+      df_agg <- agg_data() %>% mutate(value = Residual)
+
       sd_err <- sd(df_agg$value); mean_err <- mean(df_agg$value)
       ci_high <- mean_err + 2 * sd_err; ci_low <- mean_err - 2 * sd_err
-      
+
       all_y <- c(df_agg$value, ci_high, ci_low)
       y_min <- min(all_y, na.rm=TRUE) * 1.1
       y_max <- max(all_y, na.rm=TRUE) * 1.1
       if(y_min > 0) y_min <- y_min * 0.9
       if(y_max < 0) y_max <- y_max * 0.9
-      
+
       rect_df <- data.frame(
         xmin = input$reporting_window[1],
         xmax = input$reporting_window[2],
         ymin = y_min,
         ymax = y_max
       )
-      
+
       p <- ggplot() +
-        geom_rect(data = rect_df, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), 
+        geom_rect(data = rect_df, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax),
                   fill="#27ae60", alpha=0.1, inherit.aes = FALSE) +
-        
+
         geom_hline(yintercept = 0, color = "gray", linetype = "solid", alpha = 0.3) +
         geom_line(data = df_agg, aes(x = Period, y = value), color = "#34495e", linewidth = 0.5) +
-        geom_point(data = df_agg, aes(x = Period, y = value, 
-                                      text = paste0("<b>Period:</b> ", format(Period, "%Y-%m"), "<br>", "<b>Residual:</b> ", scales::comma(value, accuracy = 1))),
+        geom_point(data = df_agg, aes(x = Period, y = value,
+                                      text = paste0("<b>Period:</b> ", format(Period, "%Y-%m-%d"), "<br>", "<b>Residual:</b> ", scales::comma(value, accuracy = 1))),
                    color = "#e74c3c", size = 1.2) +
         geom_hline(aes(yintercept = ci_high, text = paste0("<b>Upper Band:</b> ", scales::comma(ci_high, accuracy = 1))), color = "#3498db", linetype = "dashed", alpha = 0.8) +
         geom_hline(aes(yintercept = ci_low, text = paste0("<b>Lower Band:</b> ", scales::comma(ci_low, accuracy = 1))), color = "#3498db", linetype = "dashed", alpha = 0.8) +
-        
+
         scale_y_continuous(labels = scales::label_number(scale_cut = scales::cut_short_scale())) +
         scale_x_date(date_breaks = "1 month", date_labels = "%Y-%m") +
         labs(y = "Residuals", x = "") + theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
-      
+
       ggplotly(p, tooltip = "text") %>%
         style(hoverinfo = "skip", traces = 1)
     })
-    
+
     # Chart 3: Residuals Seasonality
     output$residual_seasonality <- renderPlotly({
-      req(newdata_calc())
-      df <- newdata_calc()
-      df_agg <- df %>% group_by(Period) %>% 
-        summarise(Actual = sum(na.omit(Actual_Trans)), Fitted = sum(na.omit(Fitted_Trans))) %>%
-        mutate(value = Actual - Fitted, 
-               Week = as.numeric(strftime(Period, format = '%V')), 
-               Year = as.character(format(Period, "%Y")), 
+      req(agg_data())
+      # ISO week and ISO (week-based) year, so weeks at the turn of the year
+      # are assigned to the right year (e.g. week 1 dated in late December).
+      df_agg <- agg_data() %>%
+        mutate(value = Residual,
+               Week = lubridate::isoweek(Period),
+               Year = as.character(lubridate::isoyear(Period)),
                Type = "Annual")
-      
+
       plot_data <- df_agg
       if (isTRUE(input$show_trend)) {
         df_trend <- df_agg %>% group_by(Week) %>% summarise(value = mean(value, na.rm = TRUE)) %>% mutate(Year = "Average Trend", Period = as.Date(NA), Type = "Trend")
         plot_data <- bind_rows(df_agg, df_trend)
       }
       unique_years <- sort(unique(df_agg$Year))
-      base_palette <- c("#2c3e50", "#c0392b", "#7f8c8d", "#27ae60", "#8e44ad", 
-                        "#2980b9", "#d35400", "#16a085", "#34495e", "#95a5a6")
-      color_map <- setNames(base_palette[1:length(unique_years)], unique_years)
+      color_map <- setNames(get_palette(length(unique_years)), unique_years)
       size_map <- setNames(rep(0.6, length(unique_years)), unique_years)
       type_map <- setNames(rep("solid", length(unique_years)), unique_years)
       if (isTRUE(input$show_trend)) { color_map["Average Trend"] <- "black"; size_map["Average Trend"]  <- 1.2; type_map["Average Trend"]  <- "dashed" }
@@ -554,8 +492,8 @@ mod_avm_server <- function(id) {
         scale_linewidth_manual(values = size_map) +
         scale_linetype_manual(values = type_map) +
         scale_y_continuous(labels = scales::label_number(scale_cut = scales::cut_short_scale())) +
-        scale_x_continuous(breaks = seq(1, 53, 1)) + 
-        labs(x = "Week Number", y = "Residuals") + 
+        scale_x_continuous(breaks = seq(1, 53, 1)) +
+        labs(x = "Week Number", y = "Residuals") +
         theme_minimal() +
         theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size = 8), panel.grid.minor.x = element_blank())
       ggplotly(p, tooltip = "text")
